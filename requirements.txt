@@ -1,0 +1,5 @@
+# Runtime dependency — the framework and data loader use only NumPy.
+numpy>=1.21
+
+# Development / testing (install with: pip install -r requirements-dev.txt)
+# pytest is only needed to run the test suite, kept separate below.

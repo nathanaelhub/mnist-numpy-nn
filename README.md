@@ -1,5 +1,9 @@
 # mnist_nn — a NumPy-only neural network framework
 
+[![CI](https://github.com/nathanaelhub/mnist-numpy-nn/actions/workflows/ci.yml/badge.svg)](https://github.com/nathanaelhub/mnist-numpy-nn/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
+
 A small, modular, object-oriented neural network library built with **nothing but
 NumPy**, plus a training script that classifies the MNIST handwritten digits.
 
@@ -63,10 +67,12 @@ Correctness is checked against finite-difference gradients (agreement to ~1e-12)
 ## Tests
 
 ```bash
-pip install pytest
+pip install -r requirements-dev.txt
 python -m pytest          # 22 tests: per-layer + whole-network gradient checks,
                           # activation/loss values, dropout behaviour, learning
 ```
+
+CI runs the suite on Python 3.9–3.12 on every push (see the badge above).
 
 Every layer and loss is verified by comparing its analytic gradient to a
 central finite-difference estimate of the same scalar loss.
@@ -91,7 +97,12 @@ print("test accuracy:", net.evaluate(X_te, y_te)[1])
 
 ## Requirements
 
-Python 3.8+ and NumPy. No other dependencies.
+Python 3.9+ and NumPy — no other runtime dependencies.
 ```bash
-pip install numpy
+pip install -r requirements.txt        # runtime (numpy)
+pip install -r requirements-dev.txt    # + pytest, to run the tests
 ```
+
+## License
+
+[MIT](LICENSE).
