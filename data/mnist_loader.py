@@ -67,7 +67,8 @@ def load_data(val_split=0.1, flatten=True, normalize=True, one_hot=True, seed=0)
     val_split : float
         Fraction of the 60k training images held out for validation.
     flatten : bool
-        Reshape 28x28 images to length-784 vectors.
+        If True, reshape 28x28 images to length-784 vectors (for dense nets).
+        If False, return ``(N, 1, 28, 28)`` tensors (for conv nets).
     normalize : bool
         Scale pixel values from [0, 255] into [0, 1].
     one_hot : bool
@@ -84,6 +85,9 @@ def load_data(val_split=0.1, flatten=True, normalize=True, one_hot=True, seed=0)
             x /= 255.0
         if flatten:
             x = x.reshape(x.shape[0], -1)
+        else:
+            # (N, 28, 28) -> (N, 1, 28, 28): add the channel axis conv nets expect.
+            x = x.reshape(x.shape[0], 1, x.shape[1], x.shape[2])
         return x
 
     def prep_y(y):

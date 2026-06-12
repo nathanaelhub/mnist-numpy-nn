@@ -13,7 +13,8 @@ import numpy as np
 import pytest
 
 from nn import (
-    Network, Dense, Activation, Dropout, SGD, Adam, MSE, CrossEntropy,
+    Network, Dense, Activation, Dropout, Conv2D, MaxPool2D, Flatten,
+    SGD, Adam, MSE, CrossEntropy,
 )
 
 EPS = 1e-5
@@ -212,6 +213,88 @@ def test_dropout_backward_uses_mask(rng):
 def test_dropout_invalid_rate():
     with pytest.raises(ValueError):
         Dropout(1.0)
+
+
+# --------------------------------------------------------------------------
+# Convolutional layers
+# --------------------------------------------------------------------------
+def test_conv2d_forward_shape(rng):
+    conv = Conv2D(3, 4, kernel_size=3, stride=1, padding=1, seed=0)
+    x = rng.normal(size=(2, 3, 8, 8))
+    out = conv.forward(x)
+    assert out.shape == (2, 4, 8, 8)  # "same" padding keeps H, W
+
+
+def test_conv2d_stride_and_padding_shape(rng):
+    conv = Conv2D(1, 2, kernel_size=3, stride=2, padding=0, seed=0)
+    out = conv.forward(rng.normal(size=(2, 1, 9, 9)))
+    assert out.shape == (2, 2, 4, 4)  # (9 - 3)//2 + 1 = 4
+
+
+def test_conv2d_gradients(rng):
+    """dW, db and dInput match finite differences (small tensor)."""
+    conv = Conv2D(2, 3, kernel_size=3, stride=1, padding=1, seed=0)
+    x = rng.normal(size=(2, 2, 5, 5))
+    # A fixed random upstream gradient; check the scalar sum(g * out).
+    g = rng.normal(size=(2, 3, 5, 5))
+
+    def scalar():
+        return np.sum(g * conv.forward(x))
+
+    scalar()
+    grad_in = conv.backward(g)
+
+    np.testing.assert_allclose(numeric_grad(scalar, conv.W), conv.dW, atol=ATOL)
+    np.testing.assert_allclose(numeric_grad(scalar, conv.b), conv.db, atol=ATOL)
+    np.testing.assert_allclose(numeric_grad(scalar, x), grad_in, atol=ATOL)
+
+
+def test_maxpool_forward_and_gradient(rng):
+    pool = MaxPool2D(2)
+    x = rng.normal(size=(2, 3, 4, 4))
+    out = pool.forward(x)
+    assert out.shape == (2, 3, 2, 2)
+
+    g = rng.normal(size=(2, 3, 2, 2))
+
+    def scalar():
+        return np.sum(g * pool.forward(x))
+
+    scalar()
+    grad_in = pool.backward(g)
+    np.testing.assert_allclose(numeric_grad(scalar, x), grad_in, atol=ATOL)
+
+
+def test_maxpool_rejects_indivisible():
+    with pytest.raises(ValueError):
+        MaxPool2D(2).forward(np.zeros((1, 1, 5, 5)))
+
+
+def test_flatten_roundtrip(rng):
+    flat = Flatten()
+    x = rng.normal(size=(4, 2, 3, 3))
+    out = flat.forward(x)
+    assert out.shape == (4, 18)
+    # backward restores the original shape exactly.
+    np.testing.assert_array_equal(flat.backward(out), x)
+
+
+def test_conv_net_learns(rng):
+    """A tiny CNN should drive its loss down on a small batch."""
+    x = rng.normal(size=(16, 1, 8, 8))
+    y = one_hot(rng.integers(0, 3, size=16), 3)
+
+    net = Network()
+    net.add(Conv2D(1, 4, kernel_size=3, padding=1, seed=0))
+    net.add(Activation("relu"))
+    net.add(MaxPool2D(2))                 # 8x8 -> 4x4
+    net.add(Flatten())                    # 4 * 4 * 4 = 64
+    net.add(Dense(64, 3, seed=1))
+    net.add(Activation("softmax"))
+    net.compile(CrossEntropy(), Adam(1e-2))
+
+    hist = net.fit(x, y, epochs=20, batch_size=8, verbose=False, seed=0)
+    assert hist["loss"][-1] < hist["loss"][0]
 
 
 # --------------------------------------------------------------------------
