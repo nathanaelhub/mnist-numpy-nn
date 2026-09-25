@@ -336,7 +336,10 @@ def test_full_network_param_gradients(out_act, loss_cls, rng):
 # --------------------------------------------------------------------------
 # End-to-end learning
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("optimizer", [Adam(1e-2), SGD(0.5, momentum=0.9)])
+# lr 0.1: with momentum 0.9, lr 0.5 is unstable on this problem (final accuracy
+# anywhere from 0.77 to 0.97 depending on the data seed); 0.1 reaches 1.0 on
+# every seed tried.
+@pytest.mark.parametrize("optimizer", [Adam(1e-2), SGD(0.1, momentum=0.9)])
 def test_network_learns_synthetic(optimizer, rng):
     """A linearly-separable problem should be fit to high accuracy."""
     n, d, c = 400, 10, 3
@@ -360,3 +363,47 @@ def test_compile_required_before_fit(rng):
     with pytest.raises(RuntimeError):
         net.fit(rng.normal(size=(4, 3)), one_hot(rng.integers(0, 2, 4), 2),
                 epochs=1, batch_size=2, verbose=False)
+
+
+# ---------------------------------------------------------------------------
+# Fused softmax + cross-entropy
+# ---------------------------------------------------------------------------
+def test_cross_entropy_from_logits_matches_unfused_in_normal_range(rng):
+    z = rng.normal(size=(6, 5))
+    y = np.eye(5)[rng.integers(0, 5, 6)]
+    sm, ce = Activation("softmax"), CrossEntropy()
+    p = sm.forward(z)
+    loss, grad = CrossEntropy.from_logits(z, y)
+    np.testing.assert_allclose(loss, ce.forward(p, y), rtol=1e-10)
+    np.testing.assert_allclose(grad, sm.backward(ce.backward(p, y)), atol=1e-12)
+    np.testing.assert_allclose(
+        grad, numeric_grad(lambda: CrossEntropy.from_logits(z, y)[0], z), atol=ATOL)
+
+
+def test_confidently_wrong_prediction_keeps_its_gradient():
+    # target class 50 logits below the prediction: p_target ~ 2e-22
+    z = np.array([[0.0, 50.0, 0.0]])
+    y = np.array([[1.0, 0.0, 0.0]])
+    loss, grad = CrossEntropy.from_logits(z, y)
+    np.testing.assert_allclose(grad[0], [-1.0, 1.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(loss, 50.0, rtol=1e-12)     # not capped at -log(1e-12)
+    # the unfused path loses it: ~1e-10 instead of 1
+    sm = Activation("softmax")
+    unfused = sm.backward(CrossEntropy().backward(sm.forward(z), y))
+    assert abs(unfused[0, 0]) < 1e-8
+
+
+def test_network_recovers_from_saturated_wrong_head(rng):
+    # A head initialised to be (very) confidently wrong: every sample predicted
+    # as class 1 with a 40-logit margin. With the fused gradient it recovers.
+    X = rng.normal(size=(60, 4))
+    labels = (X[:, 0] > 0).astype(int)
+    y = np.eye(2)[labels]
+    net = Network()
+    net.add(Dense(4, 2, seed=0)); net.add(Activation("softmax"))
+    net.layers[0].W[:] = 0.0
+    net.layers[0].b[:] = [[-20.0, 20.0]]
+    net.compile(CrossEntropy(), SGD(lr=0.5))
+    net.fit(X, y, epochs=200, batch_size=20, verbose=False, seed=0)
+    assert abs(net.layers[0].b[0, 1]) < 10      # the saturated bias actually moved
+    assert net.evaluate(X, y)[1] > 0.95         # (before the fix: stuck at 0.58)

@@ -54,3 +54,26 @@ class CrossEntropy(Loss):
         n = y_pred.shape[0]
         clipped = np.clip(y_pred, _EPS, 1.0)
         return -(y_true / clipped) / n
+
+    @staticmethod
+    def from_logits(logits, y_true):
+        """Exact loss and dL/d(logits) for softmax + cross-entropy, fused.
+
+        Going through probabilities loses the gradient exactly when it matters:
+        for a confidently *wrong* prediction p_target underflows, the clip in
+        :meth:`backward` caps 1/p at 1e12, and the softmax Jacobian then
+        multiplies by p ~ 1e-22 — a gradient of ~1e-10 where the true one is
+        ~1. Working from the logits avoids both the clip and the cancellation:
+
+            loss = mean_rows( logsumexp(z) - sum(y * z) )
+            dL/dz = (softmax(z) - y) / N
+
+        (Exact for rows of ``y_true`` that sum to 1, i.e. one-hot or soft labels.)
+        """
+        n = logits.shape[0]
+        shifted = logits - np.max(logits, axis=1, keepdims=True)
+        log_sum = np.log(np.sum(np.exp(shifted), axis=1, keepdims=True))
+        log_probs = shifted - log_sum
+        loss = -np.sum(y_true * log_probs) / n
+        grad = (np.exp(log_probs) - y_true) / n
+        return loss, grad

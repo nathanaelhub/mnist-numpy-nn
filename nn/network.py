@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from .layers import Activation
+from .losses import CrossEntropy
 from .progress import ProgressBar
 
 
@@ -41,10 +43,32 @@ class Network:
             x = layer.forward(x, training=training)
         return x
 
-    def backward(self, grad):
-        for layer in reversed(self.layers):
+    def backward(self, grad, skip_last=False):
+        layers = self.layers[:-1] if skip_last else self.layers
+        for layer in reversed(layers):
             grad = layer.backward(grad)
         return grad
+
+    def _fused_softmax_ce(self):
+        """True when the head is softmax + cross-entropy, which we then
+        evaluate from the logits (see :meth:`CrossEntropy.from_logits`)."""
+        last = self.layers[-1] if self.layers else None
+        return (isinstance(self.loss, CrossEntropy)
+                and isinstance(last, Activation) and last.name == "softmax")
+
+    def _loss(self, preds, y):
+        if self._fused_softmax_ce():
+            return CrossEntropy.from_logits(self.layers[-1].input, y)[0]
+        return self.loss.forward(preds, y)
+
+    def _loss_and_backward(self, preds, y):
+        """Loss value for the batch just forwarded, and backprop its gradient."""
+        if self._fused_softmax_ce():
+            loss, grad = CrossEntropy.from_logits(self.layers[-1].input, y)
+            self.backward(grad, skip_last=True)   # gradient is already w.r.t. logits
+            return loss
+        self.backward(self.loss.backward(preds, y))
+        return self.loss.forward(preds, y)
 
     # -- inference -------------------------------------------------------
     def predict(self, x):
@@ -57,7 +81,7 @@ class Network:
     def evaluate(self, x, y):
         """Return ``(loss, accuracy)`` over ``x``/``y`` in one forward pass."""
         preds = self.forward(x)
-        loss = self.loss.forward(preds, y)
+        loss = self._loss(preds, y)
         acc = self._accuracy(preds, y)
         return loss, acc
 
@@ -98,9 +122,7 @@ class Network:
                 xb, yb = X[idx], y[idx]
 
                 preds = self.forward(xb, training=True)
-                batch_loss = self.loss.forward(preds, yb)
-                grad = self.loss.backward(preds, yb)
-                self.backward(grad)
+                batch_loss = self._loss_and_backward(preds, yb)
                 self.optimizer.step(self.layers)
 
                 bs = xb.shape[0]

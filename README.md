@@ -82,8 +82,13 @@ at train vs. inference time — `fit` passes `training=True`, while `predict` /
   tensors. `Conv2D` uses the *im2col* trick (each receptive field unrolled into a
   row) so convolution and its gradient are single matrix multiplies — fully
   vectorised, no Python loops over pixels.
-- **`CrossEntropy`** — for one-hot targets over softmax probabilities. Combined
-  with the softmax layer the gradient reduces cleanly to `(p − y) / N`.
+- **`CrossEntropy`** — for one-hot targets over softmax probabilities. When a
+  `Network` ends in softmax + cross-entropy it evaluates the pair **from the
+  logits** (`CrossEntropy.from_logits`): exact log-softmax loss and gradient
+  `(p − y) / N`. Going through probabilities instead clips `1/p` and then
+  multiplies by `p`, which for a confidently wrong prediction (`p ≈ 1e-22`)
+  shrinks a gradient of ~1 to ~1e-10 — the network can't learn from exactly
+  the mistakes it most needs to.
 - **`MSE`** — mean squared error, batch-averaged.
 - **`SGD`** — with optional classical momentum. **`Adam`** — bias-corrected.
 
@@ -93,7 +98,7 @@ Correctness is checked against finite-difference gradients (agreement to ~1e-12)
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # 29 tests: per-layer + whole-network gradient checks
+python -m pytest          # 32 tests: per-layer + whole-network gradient checks
                           # (Dense, conv, pool, activations, losses), dropout
                           # behaviour, and end-to-end learning
 ```
