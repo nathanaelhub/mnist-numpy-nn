@@ -71,19 +71,40 @@ class Network:
         return self.loss.forward(preds, y)
 
     # -- inference -------------------------------------------------------
-    def predict(self, x):
+    # Inference runs in chunks of ``batch_size`` rows. A single forward pass
+    # over a whole dataset allocates activations for every sample at once —
+    # for the CNN's im2col buffers on the 10k MNIST test set that peaked at
+    # 3.9 GB; in chunks of 256 it's 0.15 GB. On an 8 GB machine the single
+    # pass swapped (15-450 s per evaluate vs 4-9 s chunked).
+    # ``batch_size=None`` restores the single pass.
+    EVAL_BATCH_SIZE = 256
+
+    def _batches(self, n, batch_size):
+        step = n if not batch_size else batch_size
+        return range(0, n, max(step, 1))
+
+    def predict(self, x, batch_size=EVAL_BATCH_SIZE):
         """Return raw network outputs (probabilities for a softmax head)."""
-        return self.forward(x)
+        return np.concatenate([self.forward(x[i:i + (batch_size or len(x))])
+                               for i in self._batches(len(x), batch_size)])
 
-    def predict_classes(self, x):
-        return np.argmax(self.forward(x), axis=1)
+    def predict_classes(self, x, batch_size=EVAL_BATCH_SIZE):
+        return np.argmax(self.predict(x, batch_size), axis=1)
 
-    def evaluate(self, x, y):
-        """Return ``(loss, accuracy)`` over ``x``/``y`` in one forward pass."""
-        preds = self.forward(x)
-        loss = self._loss(preds, y)
-        acc = self._accuracy(preds, y)
-        return loss, acc
+    def evaluate(self, x, y, batch_size=EVAL_BATCH_SIZE):
+        """Return ``(loss, accuracy)`` over ``x``/``y``, computed in chunks.
+
+        Both are exact dataset means: each chunk's mean loss is weighted by
+        its size, so the result doesn't depend on ``batch_size``.
+        """
+        n = len(x)
+        total_loss, correct = 0.0, 0
+        for i in self._batches(n, batch_size):
+            xb, yb = x[i:i + (batch_size or n)], y[i:i + (batch_size or n)]
+            preds = self.forward(xb)
+            total_loss += self._loss(preds, yb) * len(xb)
+            correct += int(np.sum(np.argmax(preds, axis=1) == np.argmax(yb, axis=1)))
+        return total_loss / n, correct / n
 
     @staticmethod
     def _accuracy(preds, y):

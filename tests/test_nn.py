@@ -407,3 +407,25 @@ def test_network_recovers_from_saturated_wrong_head(rng):
     net.fit(X, y, epochs=200, batch_size=20, verbose=False, seed=0)
     assert abs(net.layers[0].b[0, 1]) < 10      # the saturated bias actually moved
     assert net.evaluate(X, y)[1] > 0.95         # (before the fix: stuck at 0.58)
+
+
+# ---------------------------------------------------------------------------
+# Batched inference
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("batch_size", [1, 7, 64, 1000, None])
+def test_batched_inference_matches_single_pass(batch_size, rng):
+    X = rng.normal(size=(150, 6))
+    Y = np.eye(3)[rng.integers(0, 3, 150)]
+    net = Network()
+    net.add(Dense(6, 8, seed=0)); net.add(Activation("relu"))
+    net.add(Dense(8, 3, seed=1)); net.add(Activation("softmax"))
+    net.compile(CrossEntropy(), Adam())
+
+    full = net.forward(X)
+    np.testing.assert_allclose(net.predict(X, batch_size=batch_size), full, atol=1e-12)
+    np.testing.assert_array_equal(net.predict_classes(X, batch_size=batch_size),
+                                  full.argmax(1))
+    loss, acc = net.evaluate(X, Y, batch_size=batch_size)
+    single_loss, single_acc = net.evaluate(X, Y, batch_size=None)
+    np.testing.assert_allclose(loss, single_loss, rtol=1e-12)   # size-weighted mean
+    assert acc == single_acc == float(np.mean(full.argmax(1) == Y.argmax(1)))
