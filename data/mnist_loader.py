@@ -8,6 +8,7 @@ Run directly to pre-download without training::
     python -m data.mnist_loader
 """
 
+import hashlib
 import os
 import sys
 import urllib.request
@@ -21,6 +22,16 @@ _URLS = [
 ]
 _CACHE_DIR = os.path.dirname(os.path.abspath(__file__))
 _CACHE_PATH = os.path.join(_CACHE_DIR, "mnist.npz")
+# SHA-256 of the canonical bundle (the same hash Keras pins for this file).
+_SHA256 = "731c5ac602752760c8e48fbffcf8c3b850d9dc2a2aedcf2cc48468fc17b673d1"
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _report(block_num, block_size, total_size):
@@ -33,20 +44,38 @@ def _report(block_num, block_size, total_size):
 
 
 def download(force=False):
-    """Ensure ``mnist.npz`` exists locally; return its path."""
-    if os.path.exists(_CACHE_PATH) and not force:
-        return _CACHE_PATH
+    """Ensure a verified ``mnist.npz`` exists locally; return its path.
 
+    The file is fetched to ``mnist.npz.part``, checked against a pinned
+    SHA-256, and only then renamed into place — so an interrupted or
+    corrupted download can never become the cache. (Previously a Ctrl-C
+    mid-download left a truncated ``mnist.npz`` that every later run loaded
+    and died on with ``BadZipFile``.) An existing cache that fails the check
+    is discarded and re-fetched.
+    """
+    if os.path.exists(_CACHE_PATH) and not force:
+        if _sha256(_CACHE_PATH) == _SHA256:
+            return _CACHE_PATH
+        print("Cached mnist.npz is corrupt or incomplete; re-downloading.")
+
+    part = _CACHE_PATH + ".part"
     last_err = None
     for url in _URLS:
         try:
             print(f"Fetching MNIST from {url}")
-            urllib.request.urlretrieve(url, _CACHE_PATH, _report)
+            urllib.request.urlretrieve(url, part, _report)
+            digest = _sha256(part)
+            if digest != _SHA256:
+                raise ValueError(f"checksum mismatch (got {digest[:12]}...)")
+            os.replace(part, _CACHE_PATH)  # atomic: the cache is all or nothing
             print("\n  done.")
             return _CACHE_PATH
         except Exception as exc:  # try the next mirror
             last_err = exc
             print(f"\n  failed ({exc}); trying next mirror...")
+        finally:
+            if os.path.exists(part):
+                os.remove(part)
 
     raise RuntimeError(f"could not download MNIST from any mirror: {last_err}")
 

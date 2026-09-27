@@ -60,6 +60,9 @@ python train_cnn.py --full --epochs 5            # full data, ~99% accuracy
 ```
 
 The first run downloads MNIST (~11 MB) to `data/mnist.npz` and reuses it afterward.
+The download goes to a temporary file and is checked against a pinned SHA-256
+before it replaces the cache, so an interrupted or corrupted download is retried
+rather than cached.
 Pre-download without training with `python -m data.mnist_loader`.
 
 ## Design
@@ -101,7 +104,7 @@ Correctness is checked against finite-difference gradients (agreement to ~1e-12)
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # 37 tests: per-layer + whole-network gradient checks
+python -m pytest          # 41 tests: per-layer + whole-network gradient checks
                           # (Dense, conv, pool, activations, losses), dropout
                           # behaviour, and end-to-end learning
 ```

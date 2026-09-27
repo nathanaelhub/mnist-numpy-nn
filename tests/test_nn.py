@@ -429,3 +429,66 @@ def test_batched_inference_matches_single_pass(batch_size, rng):
     single_loss, single_acc = net.evaluate(X, Y, batch_size=None)
     np.testing.assert_allclose(loss, single_loss, rtol=1e-12)   # size-weighted mean
     assert acc == single_acc == float(np.mean(full.argmax(1) == Y.argmax(1)))
+
+
+# ---------------------------------------------------------------------------
+# Dataset download (network is faked)
+# ---------------------------------------------------------------------------
+import hashlib as _hashlib  # noqa: E402
+
+from data import mnist_loader  # noqa: E402
+
+_GOOD = b"pretend this is mnist.npz"
+
+
+@pytest.fixture
+def fake_cache(tmp_path, monkeypatch):
+    path = tmp_path / "mnist.npz"
+    monkeypatch.setattr(mnist_loader, "_CACHE_PATH", str(path))
+    monkeypatch.setattr(mnist_loader, "_SHA256", _hashlib.sha256(_GOOD).hexdigest())
+    monkeypatch.setattr(mnist_loader, "_URLS", ["https://mirror-a", "https://mirror-b"])
+    return path
+
+
+def _fake_fetch(monkeypatch, payloads):
+    """urlretrieve stand-in: mirror i writes payloads[i] (bytes or an exception)."""
+    calls = []
+
+    def fetch(url, dest, reporthook=None):
+        calls.append(url)
+        data = payloads[len(calls) - 1]
+        with open(dest, "wb") as f:
+            f.write(data[:5] if isinstance(data, Exception) else data)  # partial on error
+        if isinstance(data, Exception):
+            raise data
+
+    monkeypatch.setattr(mnist_loader.urllib.request, "urlretrieve", fetch)
+    return calls
+
+
+def test_interrupted_download_never_becomes_the_cache(fake_cache, monkeypatch):
+    _fake_fetch(monkeypatch, [ConnectionError("reset"), ConnectionError("reset")])
+    with pytest.raises(RuntimeError, match="any mirror"):
+        mnist_loader.download()
+    assert not fake_cache.exists()                          # no truncated cache
+    assert not (fake_cache.parent / "mnist.npz.part").exists()
+
+
+def test_corrupt_mirror_is_rejected_and_next_mirror_used(fake_cache, monkeypatch):
+    calls = _fake_fetch(monkeypatch, [b"garbage from a bad mirror", _GOOD])
+    assert mnist_loader.download() == str(fake_cache)
+    assert fake_cache.read_bytes() == _GOOD and len(calls) == 2
+
+
+def test_corrupt_existing_cache_is_redownloaded(fake_cache, monkeypatch):
+    fake_cache.write_bytes(_GOOD[:7])                       # truncated leftover
+    calls = _fake_fetch(monkeypatch, [_GOOD])
+    mnist_loader.download()
+    assert fake_cache.read_bytes() == _GOOD and len(calls) == 1
+
+
+def test_valid_cache_is_reused_without_network(fake_cache, monkeypatch):
+    fake_cache.write_bytes(_GOOD)
+    calls = _fake_fetch(monkeypatch, [])
+    mnist_loader.download()
+    assert calls == []
